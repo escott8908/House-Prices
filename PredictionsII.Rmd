@@ -1,0 +1,530 @@
+---
+title: "Predictions"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Intro
+```{r}
+library(tidyverse)
+library(mlr)
+library(parallelMap)
+configureMlr(on.learner.error = 'warn')
+```
+
+I have characters and integers in this data set.  I'm going to do a random forest first and see what it gives me.  
+
+What models do I want to use?
+
+Linear Models
+1) OLS
+2) PCR
+3) PLS
+4) Lasso
+5) Ridge (maybe)
+6) elastic net
+
+Non-Linear Models
+1) linear SVM
+2) radial basis SVM
+3) polynomial SVM
+4) knn
+5) MARS, and boosted MARS
+6) nnet (it would be great to learn Keras)
+
+Trees
+1) regular old tree
+2) bagged tree
+3) randomForest
+4) boosted tree
+
+Benchmark these models
+
+# Model Prep
+```{r}
+# re-separate training and testing data
+train_data = dumimpdata2 %>% filter(!is.na(SalePrice))
+new_data = dumimpdata2 %>% filter(is.na(SalePrice))
+
+set.seed(1978)
+train_idx = caret::createDataPartition(train_data$SalePrice, p = 3/4, list = FALSE)
+test_idx = setdiff(1:nrow(train_data), train_idx)
+
+# make Regression task
+regr_task = makeRegrTask(id = 'house prices', train_data, target = 'SalePrice', 
+                         fixup.data = 'no')
+
+# make resampling object
+rdesc = makeResampleDesc("CV", iters = 10, predict = 'both')
+rin = makeResampleInstance(rdesc, task = regr_task)
+
+# measures
+rmse.test.mean = setAggregation(rmse, test.mean)
+rmse.test.sd = setAggregation(rmse, test.sd)
+rmse.train.mean = setAggregation(rmse, train.mean)
+rmse.train.sd = setAggregation(rmse, train.sd)
+
+mae.test.mean = setAggregation(mae, test.mean)
+mae.test.sd = setAggregation(mae, test.sd)
+mae.train.mean = setAggregation(mae, train.mean)
+mae.train.sd = setAggregation(mae, train.sd)
+
+arsq.test.mean = setAggregation(arsq, test.mean)
+arsq.test.sd = setAggregation(arsq, test.sd)
+arsq.train.mean = setAggregation(arsq, train.mean)
+arsq.train.sd = setAggregation(arsq, train.sd)
+
+measures = list(timetrain, rmse.test.mean, rmse.test.sd, rmse.train.mean, rmse.train.sd,
+                mae.test.mean, mae.test.sd, mae.train.mean, mae.train.sd,
+                arsq.test.mean, arsq.test.sd, arsq.train.mean, arsq.train.sd)
+
+# make tune control
+control = makeTuneControlRandom(maxit = 250)
+
+```
+
+# Feature Selection
+
+## Filtered Feature Selection
+```{r}
+filter_methods = c("cforest.importance", "chi.squared", "information.gain", "randomForestSRC.rfsrc")
+fv = generateFilterValuesData(task = regr_task, method = filter_methods)
+plotFilterValues(fv)
+```
+```{r}
+g1 = GGally::ggpairs(fv$data, columns = 3:6)
+a = fv$data %>% arrange(desc(randomForestSRC.rfsrc) )
+g2 = GGally::ggpairs(a[-c(1,2),], columns = 3:6)
+
+print(g1)
+print(g2)
+```
+
+Here are some variables that are consistently appearing as important.  But is this important?  I a better/safer way to interpret this is to understand that some variables are important for random forest while others are that use information.gain and chi.squared would prefer a different set of variables.
+
+So, if I know before hand that I want to use a decision tree to model the data set, then I should use a feature selection method that is related to trees?  
+
+```{r}
+fv$data %>% filter(chi.squared != 0 & information.gain != 0 & cforest.importance > 0 & randomForestSRC.rfsrc > 0)
+```
+
+
+
+## Wrapper For Feature Selection 
+
+
+# Linear Models
+## OLS
+
+There is a huge problem with these fucking factors during the re-sampling!!!
+
+For example 
+
+**Error in model.frame.default(Terms, newdata, na.action = na.action, xlev = object$xlevels) : 
+  factor Condition2_zeroo has new levels Artery, PosA, RRAn**
+
+The only way to handle this might be to create dummy variables before resampling.  This would mean that I would have to do all the predictions over below!  Why is this not a problem for enet???
+
+```{r}
+# create learner
+lm_lrn = makeLearner('regr.lm')
+
+# create parameter set. 
+### Not necesary for OLS
+### If I'm not sure that I need all the features, why am I beginning with linear models?
+### Why not jump straight to Lasso?
+
+### Just use the step function and then build a simple linear model with mlr to 
+### test it's performance
+
+mdl = lm(SalePrice ~ ., train_data)
+mdl_step = step(mdl, direction = 'both')
+
+mdl_feats = (formula(mdl_step) %>% as.character %>% str_split("\\s+\\+\\s+"))[[3]]
+mdl_feats_rm = setdiff(getTaskFeatureNames(regr_task), mdl_feats)
+
+# resampe models
+lmfull_resample = resample(lm_lrn, regr_task, rin, measures)
+lmstep_resample = resample(lm_lrn, dropFeatures(regr_task, mdl_feats_rm), rin, measures)
+
+# build full and step models 
+lmfull_mdl = train(lm_lrn, regr_task)
+lmstep_mdl = train(lm_lrn, dropFeatures(regr_task, mdl_feats_rm))
+
+
+```
+
+
+## PCR
+
+Will this work on my task if I have fator variables?  Will the factor variables be turned into dummy variables automatically?
+
+```{r}
+pcr_lrn = makeLearner('regr.pcr')
+
+# wrap pcr and pls with a preprocessing scaled wrapper
+pcr_lrn = makePreprocWrapperCaret(pcr_lrn, ppc.scale = TRUE, ppc.center=TRUE)
+
+# create par.set
+par.set = makeParamSet(
+  makeIntegerParam('ncomp', lower = 1, upper = length(getTaskFeatureNames(regr_task)))
+)
+
+# tune this thing
+
+parallelStartMulticore(6)
+pcr_tune = tuneParams(learner = pcr_lrn, task = regr_task, resampling = rin,
+                      measures = measures, par.set = par.set, control = control)
+parallelStop()
+
+# plot measures
+pcr_hd = generateHyperParsEffectData(pcr_tune)
+pcr_hd$data %>% 
+  select(-iteration, -exec.time) %>% 
+  gather(test_type, score, -ncomp) %>% 
+  separate(test_type, into = c("measure", "data_type", "statistic")) %>%
+  filter(statistic == 'mean') %>%
+  ggplot(aes(ncomp, score, color = data_type)) + 
+  geom_point() + 
+  geom_line() + 
+  facet_wrap(~measure, scales = 'free')
+
+# extract and train final model
+pcr_tune$x
+pcr_tune$y
+
+pcr_lrn_tuned = setHyperPars(pcr_lrn, par.vals = pcr_tune$x)
+pcr_mdl_tuned = train(pcr_lrn, regr_task)
+
+```
+
+
+HERE HERE HERE HERE
+?getFeatureImportance()
+
+## PLS
+```{r}
+plsr_lrn =makeLearner('regr.plsr')
+
+# make a wrapper to scale and center the feataures
+plsr_lrn = makePreprocWrapperCaret(plsr_lrn, ppc.scale = TRUE, ppc.center = TRUE)
+
+# make the parameter set
+par.set = makeParamSet(
+  makeIntegerParam('ncomp', lower = 1, upper = length(getTaskFeatureNames(regr_task)))
+)
+
+# tune the model
+parallelStartMulticore(6)
+plsr_tune = tuneParams(learner = plsr_lrn, regr_task, rin, measures, par.set, control)
+parallelStop()
+
+# plot the performances
+plsr_hd = generateHyperParsEffectData(plsr_tune)
+plsr_hd$data %>% 
+  select(-iteration, -exec.time) %>%
+  gather(test_type, score, -ncomp) %>%
+  separate(test_type, into = c("measure", "data_type", "statistic")) %>%
+  filter(statistic == "mean") %>% 
+  ggplot(aes(ncomp, score, color = data_type)) + 
+  geom_point() + geom_line() + facet_wrap(~measure, scales = 'free')
+
+# extract and train final model
+plsr_tune$x
+plsr_tune$y
+
+plsr_lrn_tuned = setHyperPars(plsr_lrn, par.vals = plsr_tune$x)
+plsr_mdl_tuned = train(plsr_lrn_tuned, regr_task)
+
+```
+
+
+## Ridge
+alpha=1 is the lasso penalty, and alpha=0 the ridge penalty.
+```{r}
+ridge_lrn = makeLearner('regr.glmnet', alpha=0)
+
+# create parameter set
+par.set = makeParamSet(
+  makeNumericParam('lambda', lower = 0, upper = 50000)
+)
+
+# test tune model
+parallelStartMulticore(7)
+test_tune = map_dfr(seq(5,40,5), function(maxit){
+  ctrl = makeTuneControlRandom(maxit = maxit)
+  elapsed = system.time(
+    tuneParams(ridge_lrn, regr_task, rin, measures, par.set, ctrl)
+  )['elapsed']
+  tibble(maxit = maxit, elapsed = elapsed)
+})
+parallelStop()
+
+summary(l <- lm(elapsed ~ maxit, test_tune))
+ggplot(test_tune, aes(maxit, elapsed)) + geom_point() + geom_smooth() + 
+  geom_smooth(method = 'lm', color = 'red')
+
+predict(l, list(maxit = seq(1000,5000,1000)))/60
+
+# create control object
+control = makeTuneControlRandom(maxit = 3000)
+
+# tune model
+parallelStartMulticore(7)
+ridge_tune = tuneParams(ridge_lrn, regr_task, rin, measures, par.set, control)
+parallelStop()
+
+# explore performance
+(ridge_tune %>% generateHyperParsEffectData)$data %>% 
+  select(-iteration) %>%
+  gather(test_type, score, -lambda, -exec.time) %>%
+  separate(test_type, into =c("measure", "data_type", "statistic")) %>%
+  filter(statistic == 'mean') %>%
+  ggplot(aes(lambda, score, color = data_type)) + 
+  geom_point() + geom_line() + facet_wrap(~measure, scales = 'free') + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+
+# extrain tuned parameters and re-train model
+ridge_tune$y
+ridge_tune$x
+
+ridge_lrn_tuned = setHyperPars(ridge_lrn, par.vals = ridge_tune$x)
+ridge_mdl_tuned = train(ridge_lrn_tuned, regr_task)
+
+```
+
+R-squared is HIGH!  Residual standard error is low.  (How in the hell is this residual standard eror defined again?)
+
+## Lasso
+alpha=1 is the lasso penalty, and alpha=0 the ridge penalty.
+```{r}
+# create learner
+lasso_lrn = makeLearner('regr.glmnet', alpha=1)
+
+# create par.set
+par.set = makeParamSet(
+  makeNumericParam('lambda', lower = 0, upper = 50000)
+)
+
+# test tune
+parallelStartMulticore(7)
+lasso_test_tune = map_dfr(seq(5,50,5), function(maxit){
+  ctrl = makeTuneControlRandom(maxit = maxit)
+  elapsed = system.time(
+    tuneParams(lasso_lrn, regr_task, rin, measures, par.set, ctrl)
+  )['elapsed']
+  tibble(maxit = maxit, elapsed = elapsed)
+})
+parallelStop()
+
+l = lm(elapsed ~ maxit, lasso_test_tune)
+summary(l)
+predict(l, list(maxit = seq(1000,5000,1000)))/60
+
+# create control
+control = makeTuneControlRandom(maxit = 3000)
+
+# tune params
+parallelStartMulticore(7)
+lasso_tune = tuneParams(lasso_lrn, regr_task, rin, measures, par.set, control)
+parallelStop()
+
+# explore tuned params
+generateHyperParsEffectData(lasso_tune)$data %>%
+  select(-iteration) %>%
+  gather(test_type, score, -lambda, -exec.time) %>%
+  separate(test_type, into =c('measure', 'data_type', 'statistic')) %>%
+  filter(statistic == 'mean') %>%
+  ggplot(aes(lambda, score, color = data_type)) + geom_point() + geom_line() +
+  facet_wrap(~measure, scales = 'free')
+
+# extract tuned param and re-train model
+lasso_tune$x
+lasso_tune$y
+
+lasso_lrn_tuned = setHyperPars(lasso_lrn, par.vals = lasso_tune$x)
+lasso_mdl_tuned = train(lasso_lrn_tuned, regr_task)
+
+```
+
+Why use either Lasso or Ridge when Elastic Net performs searchs both?
+
+## Elastic Net
+
+Executing Lasso and Ridge separately established a nice lambda boundary for me, (1300,4200).
+
+```{r}
+# create Learner
+enet_lrn = makeLearner('regr.glmnet')
+
+# create parameter set
+
+par.set = makeParamSet(
+  makeNumericParam("alpha", lower = 0, upper = 1),
+  makeNumericParam("lambda", lower = 0, upper = 50000)
+)
+
+# tune test
+parallelStartMulticore(7)
+enet_test_tune = map_dfr(seq(5,50,5), function(maxit){
+  ctrl = makeTuneControlRandom(maxit = maxit)
+  elapsed = system.time(
+    tuneParams(enet_lrn, regr_task, rin, measures, par.set, ctrl)
+  )['elapsed']
+  tibble(maxit = maxit, elapsed = elapsed)
+})
+parallelStop()
+
+l = lm(elapsed ~ maxit, enet_test_tune)
+summary(l)
+predict(l, list(maxit = seq(500,5000,500)))/60
+
+# make  control object
+control = makeTuneControlRandom(maxit = 5000)
+
+# tune model
+parallelStartMulticore(7)
+enet_tune = tuneParams(enet_lrn, regr_task, rin, measures, par.set, control)
+parallelStop()
+
+# generate hyper param effect data
+generateHyperParsEffectData(enet_tune)$data %>%
+  select(-iteration) %>%
+  gather(test_type, score, -alpha, -lambda, -exec.time) %>%
+  separate(test_type, into = c('measure', 'data_type', 'statistic')) %>%
+  filter(statistic == 'mean' & measure == 'rmse') %>%
+  mutate(alpha_fct = cut_width(alpha, width = .1, boundary = 0),
+         lambda_fct = cut_width(lambda, width = 500, boundary = 10000)) %>%
+  ggplot(aes(lambda, score, color = alpha_fct)) + geom_point(alpha = .5, size = 1) + 
+  geom_line() +
+  facet_wrap(~data_type)
+
+# extract tuned model and train
+enet_tune$x
+enet_tune$y
+
+enet_lrn_tuned = setHyperPars(enet_lrn, par.vals = enet_tune$x)
+enet_mdl_tuned = train(enet_lrn_tuned, regr_task)
+
+```
+
+Lessons learned: 
+
+1) I can use cut_width to factorize parameters which make creating scatter plots easier.
+
+
+## SVM linear
+```{r}
+# create learner
+svml_lrn = makeLearner('regr.ksvm', kernel = "vanilladot")
+
+# creat par.set
+### NOTE:  The author suggests not messing with epsilon
+par.set = makeParamSet(
+  makeNumericParam('C', lower = 0, upper = 10),
+  makeNumericParam('epsilon', lower = 0, upper = .3)
+)
+
+# explore tuning times
+parallelStartMulticore(7)
+svml_test_tune = map_dfr(seq(5,50,5), function(maxit){
+  ctrl = makeTuneControlRandom(maxit = maxit)
+  elapsed = system.time(
+    tuneParams(svml_lrn, regr_task, rin, measures, par.set, ctrl)
+  )['elapsed']
+  tibble(maxit = maxit, elapsed = elapsed)
+})
+parallelStop()
+
+l = lm(elapsed ~ maxit, svml_test_tune)
+summary(l)
+predict(l, list(maxit = seq(500,5000,500)))/60
+
+# create control
+control = makeTuneControlGenSA(start = list('C' = 50, 'epsilon' = .1), 
+                               control = list(max.time = 60*5))
+control = makeTuneControlRandom(maxit = 100)
+
+# tune model
+parallelStartMulticore(6)
+svmlfull_tune = tuneParams(svml_lrn, regr_task, rin, measures, par.set, control)
+svmlstep_tune = tuneParams(svml_lrn, dropFeatures(regr_task, mdl_feats_rm), rin, measures, par.set, control)
+parallelStop()
+
+# explore parameters
+# Do I see the curve in the test data?
+dfull = generateHyperParsEffectData(svmlfull_tune)$data %>%
+  select(-iteration) %>% 
+  gather(test_type, score, -C, -epsilon) %>% 
+  separate(test_type, into = c('measure', 'data_type', 'statistic')) %>%
+  mutate(C_fct = cut_width(C, 10, boundary = 0), 
+         epsilon_fct = cut_width(epsilon, .1, boundary = 0)) %>%
+  filter(statistic == 'mean', measure == 'rmse') 
+
+dfull %>%
+  ggplot(aes(C, score, color = epsilon_fct)) + geom_point() + geom_line() + 
+    facet_wrap(~data_type)
+
+dfull %>% ggplot(aes(epsilon, score, color = C_fct)) + geom_point() + geom_line() +
+  facet_wrap(~data_type)
+  
+dstep = generateHyperParsEffectData(svmlstep_tune)$data %>%
+  select(-iteration) %>%
+  gather(test_type, score, -C, -epsilon) %>%
+  separate(test_type, into = c('measure', 'data_type', 'statistic')) %>%
+  mutate(C_fct = cut_width(C, .1, boundary = 0),
+         epsilon_fct = cut_width(epsilon, .1, boundary = 0)) %>%
+  filter(statistic == 'mean', measure == 'rmse')
+
+dstep %>% filter(epsilon <= .1) %>% 
+  ggplot(aes(C, epsilon, color = score)) + geom_point() + 
+  scale_color_continuous(low = 'black', high = 'yellow')
+
+# extract and re-train model
+
+
+```
+
+
+
+# Non-Linear Models
+
+## nnet
+
+## MARS
+
+## SVM poly
+
+## SVM radial bias
+
+## knn
+
+# Trees
+## Random Forest
+```{r}
+# make learner
+rf_lrn = makeLearner('regr.randomForest', id = 'random forest regression')
+
+# make tune params
+par.set = makeParamSet(
+  makeDiscreteParam('mtry', values = 2:76)
+)
+
+
+# tune model
+
+parallelStartMulticore(cpus = 6)
+tune_rf = tuneParams(learner = rf_lrn, task = regr_task, resampling = rin, 
+           measures = measures, par.set = par.set, control = control)
+parallelStop()
+
+# plot the tuned params 
+
+# train wrapped learner on best params
+
+# make prediction
+
+```
+

@@ -1,0 +1,449 @@
+---
+title: "House Prices, EDA Take 3"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_float: yes
+  html_notebook:
+    theme: paper
+    toc: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+# Intro
+
+Just need to practice some EDA and MVA.  This is not to be confused with Data Mining...or should it?
+
+Here are some kernels I want to read in the future:
+
+1) https://www.kaggle.com/erikbruin/house-prices-lasso-xgboost-and-a-detailed-eda  
+2) https://www.kaggle.com/notaapple/detailed-exploratory-data-analysis-using-r  
+3) https://www.kaggle.com/tannercarbonati/detailed-data-analysis-ensemble-modeling  
+4) https://www.kaggle.com/jimthompson/ensemble-model-stacked-model-example  
+
+
+References:  
+
+1) Intro to MVA using R
+2) exdata.pdf
+3) R for data Science
+4) (Need to get) Multivariate Data Analysis, Joseph Hair
+
+What approach do I have so far?
+
+1) What is the size of the data set (N vs P)?
+2) What area the types of features?
+3) How many features contain missing?
+4) What variables should be factors?
+5) What variables are normally distributed?
+7) What are the outliers?
+6) Can these variables be normalized?
+8) What are variables are significantly correlated with the target variable?
+9) What variables are significantly correlated with each other?
+
+Important not from last nights readings. Remember that EDA is maximized with you are asking questions of the data.  Each plot/figure is the answer to a question.  What questions are being answered by these plots?
+
+# What is the size of the data?
+
+```{r, cache=TRUE}
+library(tidyverse)
+
+train = read_csv("train.csv")
+test = read_csv("test.csv")
+
+dim(train)
+dim(test)
+```
+
+```{r, cache=TRUE}
+names(train)
+names(test)
+```
+
+```{r, cache=TRUE}
+test = test %>% mutate(SalePrice = NA, origin = "test")
+train = train %>% mutate(origin = "train")
+
+data0 = bind_rows(test, train)
+
+dim(data0)
+```
+
+Need to rename some stuff from above AND sort them in alphabetical order!
+
+```{r}
+library(tidyverse)
+data0 = data0 %>% 
+  select(sort(names(data0))) %>%
+  rename(FirstFlrSF = `1stFlrSF`,
+         SecondFlrSF = `2ndFlrSF`,
+         ThreeSesonPrch = `3SsnPorch`)
+  
+```
+
+
+# What are the data types of the features?
+
+```{r, cache=TRUE}
+data0 %>% map_chr(class) %>% ftable
+```
+
+# Explore missing data
+
+```{r, fig.height = 6, cache=TRUE}
+is.na(data0) %>% 
+  colSums %>% 
+  data.frame %>% 
+  rownames_to_column("feature") %>%
+  rename(`NA_count` = ".") %>% 
+  ggplot(aes(reorder(feature, NA_count), NA_count)) + 
+  geom_point() + 
+  coord_flip() + geom_linerange(aes(ymin = 0, ymax = NA_count))
+```
+
+There are lots of variables with zero NA's. Let's eliminate these from the figure and replot.
+
+```{r, cache=TRUE}
+is.na(data0) %>% 
+  colSums() %>%
+  as.data.frame() %>%
+  rownames_to_column("features") %>%
+  rename(NA_counts = ".") %>%
+  filter(NA_counts > 0) %>%
+  ggplot(aes(reorder(features, NA_counts), NA_counts)) + 
+  geom_point() + 
+  geom_linerange(aes(ymin = 0, ymax = NA_counts)) + 
+  coord_flip()
+```
+
+
+Many of these NA's should be renamed "None". I'll redo this reall quick before getting into imputation and proceedinig with more EDA because this is a simple fix. I'll replots these but with only those features with at least 1 NA.
+
+```{r, cache=TRUE}
+library(stringr)
+
+feats = c("Alley", "BsmtQual", "BsmtCond", "BsmtExposure", "BsmtFinType1", "BsmtFinType2", "FireplaceQu", "GarageType", "GarageFinish", "GarageQual", "GarageCond", "PoolQC", "Fence", "MiscFeature", "MasVnrType")
+
+data1 = data0 %>% 
+  mutate_at(feats, funs(replace_na(., "None")))
+
+is.na(data1) %>% colSums() %>% as.data.frame() %>% 
+  rownames_to_column("features") %>%
+  rename("NA_counts" = ".") %>% filter(NA_counts > 0) %>%
+  ggplot(aes(reorder(features, NA_counts), NA_counts)) + geom_point() + 
+  geom_linerange(aes(ymin = 0, ymax = NA_counts)) + 
+  coord_flip()
+  
+
+```
+
+This helped out alot.  The SalePrice is a red herring because this is from the testing data set.  Let's replot with this variable removed.
+
+```{r, cache=TRUE}
+is.na(data1) %>% colSums() %>% as.data.frame() %>% 
+  rownames_to_column("features") %>%
+  rename("NA_counts" = ".") %>% filter(NA_counts > 0) %>%
+  filter(features != "SalePrice") %>%
+  ggplot(aes(reorder(features, NA_counts), NA_counts)) + geom_point() + 
+  geom_linerange(aes(ymin = 0, ymax = NA_counts)) + 
+  coord_flip()
+```
+
+Let's see what this data looks like with the upsetr and visdat packages. Here's the original data set
+
+```{r, cache=TRUE}
+library(visdat)
+library(naniar)
+library(UpSetR)
+
+vis_dat(data0)
+```
+
+How georgeous is this???  Here is the updated data set
+
+```{r, cache=TRUE}
+vis_dat(data1)
+```
+
+This cleaned up alot. There area lots of missing data points in the integer data types.
+
+What does the upseter package produce.  Let's remove the SalePrice variable because this will skew the data.
+
+```{r, cache=TRUE}
+
+as_shadow_upset(data0 %>% select(-SalePrice)) %>% upset(nsets = 10, order.by = "freq")
+```
+
+
+Now with the added data
+
+```{r, cache=TRUE}
+as_shadow_upset(data1 %>% select(-SalePrice)) %>% upset(nsets = 10, order.by = "freq")
+```
+
+It looks like when imputing, I'm going to have to figure out a way to deal with LotFrontage and GarageYear Built last.
+
+What percentage of observations are completed?
+
+```{r, cache=TRUE}
+sum(complete.cases(select(data0, -SalePrice)))/nrow(select(data0, -SalePrice))
+sum(complete.cases(select(data1, -SalePrice)))/nrow(select(data1, -SalePrice))
+```
+
+WOW!!! What in the hell was I looking at earlier?  With over 70% of the data complete, I could perform a preliminary benchmark analysis to identify the best learner (that can accept NA's) to use for imputing the data!!!
+
+For all the entries that have a missing data point of a few, I should manually impute these data points.  I'll do something fancy for LotFrontage and GarageYrBlt.  However, GarageYrBlt should probably be a factor variable.  How many of the other integer variables should be factor variables.  Should I go ahead and change them now?  
+
+# Change Features into Factors
+
+If it is a character variable, it is safe to say that it should be a factor variable.
+
+```{r, cache=TRUE}
+data2 = data1 %>% mutate_if(is.character, as.factor)
+```
+
+What integer data types should be factors?
+```{r, cache=TRUE}
+data2 %>% select_if(is.integer) %>% glimpse
+```
+
+Oh hell! Id needs to be removed!
+
+Anything labeled Qual or Cond should be an ordered factor.
+
+MoSold should be recoded to Jan, Feb, etc. and then made into a factor variable.
+
+```{r, cache=TRUE}
+to_factor = c("MSSubClass", "MoSold")
+to_ordered_factor = c("OverallQual", "OverallCond")
+
+data3 = data2 %>% 
+  mutate_at(to_factor, as.factor) %>%
+  mutate_at(to_ordered_factor, as.factor) %>%
+  mutate_at(to_ordered_factor, as.ordered) %>%
+  mutate(MoSold = fct_recode(MoSold, 
+                              "jan"="1", "feb"="2", "mar"="3",
+                             "apr"="4",  "may"="5",  "jun"="6",
+                             "jul"="7",  "aug"="8",  "sep"="9", 
+                             "oct"="10",  "nov"="11",  "dec"="12"))
+
+glimpse(data3)
+saveRDS(data3, "data3.RDS")
+```
+
+
+
+
+# What are the frequencies of the factor variables? {.tabset}
+
+What are some important questions that can be obtained from these plots?
+
+1) What factors appear to be nearly constant and should be checked later?
+
+I think factor variables are more interesting when compared to other factor or numerical variables.
+
+
+
+```{r results='asis', cache=TRUE}
+cat = map_lgl(data3, is.factor) %>% which %>% names
+
+for(c in sort(cat)){
+  cat("##", c, "\n")
+  g = ggplot(data3, aes_string(c)) + geom_bar() + 
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  print(g)
+  cat(" \n\n")
+}
+```
+
+Of the categorical variables, how many have NA's
+
+```{r, cache=TRUE}
+is.na(select(data3, cat)) %>% colSums() %>% data.frame() %>%
+  rownames_to_column("cat_features") %>% 
+  rename(NA_counts = ".") %>% 
+  filter(NA_counts > 0) %>%
+  ggplot(aes(reorder(cat_features, NA_counts), NA_counts)) + 
+  geom_point() + geom_linerange(aes(ymin = 0, ymax = NA_counts)) + 
+  coord_flip() + ylab("categorical features")
+
+```
+
+There are several categorical features that appear to have little variability.  I'll have to use mlr's removeConstantFeatures()
+
+**Lesson Learned**: Integrity check.  I just noticed that MasVnrType has NA's and None.  Is this correct?  Are these typos?  If you don't have a Masonry Vaneer, then shouldn't this be None, not NA?  I think these should be changed to None.
+
+Also Exterior1st and Exterior2nd have NA's.  Why can't these be other?
+
+SaleType's NA's could be changed to Oth.  
+
+Many of these factor variables that still have NA's can be dealt with manual imputation.  I wonder if there is a way to randomly assisgn categories to these NA's that's a product of the data distribution. 
+
+# What values appear to be normal {.tabset}
+
+```{r, results='asis', cache=TRUE, warning=FALSE, message=FALSE}
+library(gridExtra)
+num = map_lgl(data3, is.numeric) %>% which %>% names
+names(num) = num
+
+# generate boxplots -----
+g_boxplot = map(num, function(n){
+  ggplot(data3, aes_string(y = n)) + geom_boxplot(aes(x = ""))
+})
+
+# generate qq plots -----
+g_qq = map(num, function(n){
+  ggplot(data3, aes_string(sample = n)) + geom_qq() + geom_qq_line(color = 'blue')
+})
+
+# generate density -----
+g_density = map(num, function(n){
+  ggplot(data3, aes_string(n)) + 
+    geom_histogram(aes(y = ..density..), color = "black", fill = "grey", alpha = .5) + 
+    geom_density(color = 'blue') 
+})
+
+# generate position plots -----
+g_points = map(num, function(n){
+  ggplot(data3, aes_string("Id", n)) + 
+    geom_point(alpha = .2) + geom_miss_point(alpha = .3)
+})
+
+# plot -----
+
+for(n in sort(num)){
+  cat("##", n, "\n")
+  
+  g_list = list(g_boxplot[[n]], g_qq[[n]], g_points[[n]], g_density[[n]])
+  print(grid.arrange(grobs = g_list), nrow = 2)
+  
+  cat("\n\n")
+}
+
+```
+
+## Notes on ouliers and missing data
+
+What featues from the plots above should be investigated for outliers?  
+
+1) BedroomAbvGr:  Nothing missing. Is 8 an outlier?  Does this jive with the rest of the data?  Should this feature bea ordinal?
+
+```{r}
+filter(data3, BedroomAbvGr == 8)
+```
+
+The Great Living Area for this home is 3395 when the first floor and second floor both have a total of 1440 sqft. There is a difference of 1115.  DAMNIT!  So what are the relationships between these numbers? A relationship between these could be very important for data integrity. It has 14 damn rooms!
+
+Also, it might be helpful to put in a temporary SalePrice_percentile, just to know where the price stands for a specific observation.
+
+
+```{r}
+getSalePricePercentile = function(id = NA){
+  select(data3, Id, SalePrice) %>% mutate(percentile = percent_rank(SalePrice)) %>% filter(Id == id) %>% print()
+  
+  print(summary(data3$SalePrice))
+}
+
+getSalePricePercentile(636)
+```
+
+It's in the 70%, meaning that it is as or more expensive than 70% of the homes listed in the training set. Is that high? The mean is 180K, while the median is 164K.  
+
+2) BsmtFinSF1: Looks like one missing data point.  Is there any associated data with this point that migh suggest a true value?  There are also two HUGE points that could be outliers.
+
+```{r}
+filter(data3, is.na(BsmtFinSF1))
+```
+
+I don't think this guy has a basement.  TotalBsmtSF is also NA.
+
+```{r}
+arrange(data3, BsmtFinSF1) %>% 
+  select(BsmtFinSF1, BsmtFinSF2, BsmtFullBath, BsmtHalfBath, BsmtUnfSF, FirstFlrSF, TotalBsmtSF, SalePrice) %>% tail
+
+arrange(data3, BsmtFinSF1) %>%  tail
+```
+
+
+
+3) BsmtFinSf2: Another missing data point.  Is this correlated with the above data point?  Does this house have a basement?  If not, then this should be zero.  Would this be easier to see if the zero points were removed?
+
+```{r}
+data3 %>% filter(BsmtFinSF2 > 0) %>% ggplot(aes(sample = BsmtFinSF2)) + 
+  geom_qq() + geom_qq_line(color = 'blue')
+```
+
+There are still three huge outliers that might warrant some exploration.  Also, Why in the hell are there near zero basement sizes.  What is this?  
+
+
+4) BsmtFullBath: This has a 3, but does this make sense with the rest of the data for this observation
+    a) This feature could be changed to a ordinal feature.
+5) EnclosedPorch:  Has a huge outlier.  Does this appear to make sense with the rest of the data associated with the observation
+6) Fireplaces: Can a house have 3 and 4 fireplaces? I would expect this house to be expensive.
+7) GarageYrBlt: Ain't no way this garage was built in 2200!  This probably should be changed to the year the house was built.  I'm assuming it should be 2000.
+8) GrLivArea:  Some humongous living areas at the top.  Are these legit with the rest of the daa in this observation?
+9) KitchenAbvGr:  Are these two homes with 3 kitchens expensive and huge?
+
+# What area the numerical outliers
+
+
+
+## Outlier detection with boxplot.stats()
+
+boxplot.stats(), in particular the $out variable contains the points outside of the whiskers.
+
+```{r}
+row_outlier_count = map_dfc(data3[,num] %>% select(-Id), function(col){
+  col %in% boxplot.stats(col)$out
+}) %>% rowSums()
+
+boxplot(row_outlier_count)
+plot(density(row_outlier_count))
+hist(row_outlier_count)
+
+
+```
+
+Really?  This is interesting. There are 33 numerical features.  10% = 3.3, 25% = 8.25.  So Let's look at those rows with 3 or more outliers.  How should these be regarded? Wait.  By looking at only those rows with  more than X outliers assumes that an observation with only 1 outlier is not a problem.  All rows with more than 0 outliers should probably be considered.  But how many are these?
+
+How much of the data contains 1 or more outliers
+
+```{r}
+sum(row_outlier_count > 0)/nrow(data3)
+```
+
+Man! Over 57% of the data contain outliers.  This probably ought be reduced by moving through the numerical features and determining wheter all the features should be included in the outlier analysis, even though the boxplot.stats() function identifies them as outliers.
+
+
+```{r}
+# development -----
+
+m = map_dfc(data3[,num] %>% select(-Id), function(col){
+  col %in% boxplot.stats(col)$out
+})
+
+names(m) = str_c(names(m), "_bps")
+
+data_bps = bind_cols(data3, m)
+data_bps = select(data_bps, sort(names(data_bps))) %>% bind_cols()
+
+DT::datatable(filter(data_bps, row_outlier_count > 0), filter = "top")
+```
+
+
+I'm now wondering if all the numerical columns need to be included.  For example, BedroomAbvGr reports that there are four types of outliers.  However, I'm not sure this variable would contain too many outliers.  
+
+
+## Outlier detection with clustering
+
+1) Density based with DBSCAN, then identify objects NOT assigned to a cluster
+    a) There has to be a way to identify an optimal eps and MinPts value
+2) kmeans clustering and identify points with the largest distance from center
+    a) This seems like the most feasible approach.
+
+Thoughts:  What I'm learning in this data is that I think a univariate outlier is more concerning that an oberservational outlier.  There are some expensive homes in this data set and therefore would have multiple features as outliers.  What needs to be identified are the homes within a cluster that has a variable that is not in the norm, like an extremely huge living room.
+
+And, from what I recall, I should be tuning these bad boys!
+

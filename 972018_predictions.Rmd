@@ -1,0 +1,114 @@
+---
+title: "House Prices Predictions: September 7, 2018"
+output: 
+  html_notebook:
+    toc: yes
+    toc_float: yes
+    theme: paper
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+# Imputation and Dummy Variables 
+
+## Missing Stuff
+```{r}
+library(mlr)
+library(tidyverse)
+#library(naniar)
+
+input = readRDS("data3.RDS")
+
+visdat::vis_dat(input)
+
+```
+
+```{r}
+is.na(input %>% select(-SalePrice)) %>% colSums() %>% as.data.frame() %>% rownames_to_column("feature") %>% rename(na_count = ".") %>% filter(na_count > 0) %>%
+  ggplot(aes(reorder(feature,na_count), na_count)) + geom_bar(stat = 'identity') + 
+  coord_flip()
+```
+
+## Learners that can handle missing stuff
+
+What regression learners can handle missing values?
+
+```{r}
+listLearners("regr", properties = "missings")[c("class", "package")] %>% as.data.frame()
+```
+
+What classification learners can handle missing values?
+
+```{r}
+listLearners("classif", properties = "missings")[c("class", "package")] %>% as.data.frame()
+```
+
+Just because random forests are so damn famous, I'm going to use classif.randomForestSRC and regr.randomForestSRC for my imputation methods.  If this takes too damn long, then I may swithc up and use something simpler.  **What I need to explore in the future is how much of a difference the imputations make on my predictions.**
+
+## Imputing missing stuff
+
+[reference](https://mlr-org.github.io/mlr/articles/impute.html)
+
+imp = impute(airq.train, target = "Ozone", cols = list(Solar.R = imputeHist(),
+  Wind = imputeLearner("classif.rpart")), dummy.cols = c("Solar.R", "Wind"))
+
+The dummy.cols parameter is not going to be used now.  In the future I need to explore how the dummy.cols can be used to study the imputations.  This can be particularly helpful with LotFrontage.
+
+```{r, ERROR=TRUE}
+
+input_dummy = createDummyFeatures(input)
+
+# input_impute = impute(input_dummy, target = "SalePrice", cols = list(
+#   LotFrontage = imputeLearner("regr.rpart")),
+#   dummy.cols = c("LotFrontage")
+# )
+
+
+
+impute(input, target = "SalePrice", classes = list(
+  factor = imputeMode(),
+  integer = imputeLearner('regr.rpart'))
+  )
+
+input_impute = impute(input_dummy, target = "SalePrice", class = list(
+  integer = imputeLearner('regr.rpart')
+))
+
+input_impute$data %>% is.na() %>% colSums() %>% as.data.frame() %>% 
+  rownames_to_column("features") %>% rename(na_count = ".") %>%
+  filter(na_count > 0)
+
+# let us do this ----
+
+target = select(input, SalePrice, Id)
+features = select(input, -SalePrice)
+
+
+
+impute(input, target = "SalePrice", cols = list(
+  Condition2 = imputeLearner('classif.rpart'),
+  LotFrontage = imputeLearner('regr.rpart')
+))  
+
+
+
+input_rcf = removeConstantFeatures(input, na.ignore = TRUE, dont.rm = "SalePrice", perc = .1)
+
+input_impute2 = impute(input, classes = list(factor = imputeMode()))
+impute(input_impute2$data, classes = list(integer = imputeLearner('regr.rpart')))
+
+input_impute2$data %>% is.na() %>% colSums() %>% as.data.frame() %>% 
+  rownames_to_column("features") %>% rename(na_count = ".") %>%
+  filter(na_count > 0)
+```
+
+Why in the hell aren't all the variables being imputed?  I really need to better understand how to impute variables.  I thought I had this shit figured out. Go back to the input data frame and manually edit the following features:
+
+1) Electrical
+2) Exterior1st
+3) Exterior2nd
+4) 
+
+
+

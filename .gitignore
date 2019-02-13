@@ -1,0 +1,7 @@
+*.RDS
+*.html
+EDA3_cache/
+EDA3_files/
+.Rproj.user/
+.RData
+

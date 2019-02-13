@@ -1,0 +1,1243 @@
+---
+title: "EDA"
+output: 
+  html_notebook: 
+    toc: yes
+    theme: paper
+    highlight: tango
+editor_options: 
+  chunk_output_type: inline
+---
+
+# Intro
+
+1) Load in some modules that will be used throughout this project
+2) read in the data files.
+
+```{r}
+library(tidyverse)
+library(gridExtra)
+library(mlr)
+library(naniar)
+
+test = read_csv('test.csv')
+train = read_csv('train.csv')
+submit = read_csv('sample_submission.csv')
+head(submit)
+```
+
+# Peek at the data
+
+What are the data types of the predictors?
+
+```{r}
+map_chr(train, class) %>% ftable()
+map_chr(test,class) %>% ftable()
+```
+
+The target variable, SalePrice, is considered an integer data type and is missing from the data. 
+
+
+# What's missing
+
+Going to use both the naniar visdat module here as observed from the naniar getting started vignette.
+
+
+Let's use visdat::vis_dat
+
+```{r, fig.height = 10, fig.width = 10}
+visdat::vis_dat(train)
+visdat::vis_dat(test)
+```
+
+Let's use naniar::vismiss
+
+```{r, fig.height=10, fig.width=10}
+vis_miss(train)
+vis_miss(test)
+```
+
+How many columns have missing data?
+```{r}
+sum(is.na(test) %>% colSums() > 0)
+sum(is.na(train) %>% colSums() > 0)
+```
+
+There are 33 columns in the test data set with na's, while there are only 19 columns in the train data set with na's.  WTF?
+
+What are the different columns that are missing data between the test and train data set?
+
+```{r}
+test_missing_names = which(is.na(test) %>% colSums() > 0) %>% names
+train_missing_names = which(is.na(train) %>% colSums() > 0) %>% names
+```
+
+Predictors with NA's in both tables
+
+```{r}
+intersect(train_missing_names, test_missing_names)
+```
+
+Predictors with NA's in train, NOT test
+
+```{r}
+setdiff(train_missing_names, test_missing_names)
+```
+
+Predictors with NA's in test, NOT train
+
+```{r}
+setdiff(test_missing_names, train_missing_names)
+```
+
+
+Let's explore patterns of missing data with the UpSetR package
+
+```{r, fig.height=10, fig.width=10}
+library(UpSetR)
+train %>% as_shadow_upset() %>% upset(nsets = 19, order.by = "freq", main.bar.color = 'blue', sets.bar.color = 'blue')
+```
+
+
+```{r, fig.height=10, fig.width=10}
+test %>% as_shadow_upset() %>% upset(nsets = 20, order.by = "freq", sets.bar.color = 'blue', main.bar.color = 'blue', )
+```
+
+
+Observations:   
+1) There are NA's that either need to be imputed or resolved.  Some NA's really mean "None".
+2) The character features should be changed to factor variables.
+3) There are lots of int features and no numerical features.  Some int features probably should be changed to factor variables. 
+
+
+## (archaic) Explore where NA's are locoated
+```{r, fig.width = 15}
+train %>% 
+  is.na() %>% 
+  as.tibble() %>% 
+  mutate(observation = 1:nrow(.)) %>% 
+  gather(features, is_missing, -observation) %>% 
+  ggplot(aes(x = features, observation)) + 
+  geom_raster(aes(fill = is_missing)) + 
+  scale_fill_grey() + 
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+There is aton of shit missing!!! Let's determine what oclumns have the highest frequency of missing data
+
+```{r}
+(train %>% is.na() %>% colSums() %>% sort())/nrow(train) * 100
+```
+
+Does it look this bad for the test data set as well?
+
+```{r, fig.width = 12}
+test %>%
+  is.na() %>%
+  as.tibble() %>%
+  mutate(observation = 1:nrow(.)) %>%
+  gather(features, is_missing, -observation) %>%
+  ggplot(aes(features, observation)) + 
+  geom_raster(aes(fill = is_missing)) + 
+  scale_fill_grey() + 
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+```{r}
+(test %>% is.na() %>% colSums() %>% sort())/nrow(test) * 100 
+```
+
+Many of these columns with missing data appear to be categorical variables.
+
+Several columns that have NA's refers to a None.  What columns have NA's and probably should have them replaced with 'None'???
+
+Columns where NA's should be replaced with None: Alley, BsmtQual, BsmtCond, BsmtExposure, BsmtFinType1, BsmtFinType2, FireplaceQu, GarageType, GarageFinish, GarageQual, GarageCond, PoolQC, Fence, MiscFeature
+
+## Change the NA's to None and redo
+
+```{r}
+library(stringr)
+
+train = train %>% 
+  mutate_at(vars(Alley, BsmtQual, BsmtCond, BsmtExposure, BsmtFinType1, BsmtFinType2, FireplaceQu, GarageType, GarageFinish, GarageQual, GarageCond, PoolQC, Fence, MiscFeature), funs(replace_na(., "None")))
+
+test = test %>% 
+  mutate_at(vars(Alley, BsmtQual, BsmtCond, BsmtExposure, BsmtFinType1, BsmtFinType2, FireplaceQu, GarageType, GarageFinish, GarageQual, GarageCond, PoolQC, Fence, MiscFeature), funs(replace_na(., "None")))
+```
+
+## Visualize the changes
+
+```{r, fig.height=10, fig.width=10}
+visdat::vis_dat(train)
+visdat::vis_dat(test)
+```
+
+```{r, fig.height=10, fig.width=10}
+vis_miss(train)
+vis_miss(test)
+```
+
+```{r}
+which(is.na(train) %>% colSums() > 0 )
+```
+
+```{r}
+which(is.na(test) %>% colSums() > 0)
+```
+
+There are still alot more imssing data points in the testing data set.  These guys are going to have to be imputed or maually edited.
+
+```{r, fig.height=10, fig.width=10}
+train %>% as_shadow_upset() %>% upset()
+test %>% as_shadow_upset() %>% upset(nsets = 19)
+```
+
+
+
+## (archaic) Visualizing left over missing data
+```{r, fig.width = 12}
+train %>% filter(!complete.cases(.)) %>% is.na() %>% as.tibble() %>% 
+  mutate(obs = 1:nrow(.)) %>% gather(features, missing, -obs) %>% 
+  ggplot(aes(features, obs, fill = missing)) + geom_raster() + scale_fill_grey() + 
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+```{r, fig.width = 12}
+test %>% filter(!complete.cases(.)) %>% is.na() %>% as.tibble() %>%
+  mutate(obs = 1:nrow(.)) %>% gather(features, missing, -obs) %>%
+  ggplot(aes(features, obs, fill = missing)) + geom_raster() + scale_fill_grey() + 
+  theme(axis.text.x = element_text(angle = 60, hjust = 1))
+```
+
+Why in the hell does the test data set have so much freaking missing data???  Both data sets still have over 300 observations that contain some sort of missing information.  But the test data set has more columns with missing data.
+
+I wonder if I perform a regression tree on this data and then look at the important features, if this won't tell me whether a variable should be removed or not.  I need to read up on feature selection shit.
+
+## Fill in the blanks
+
+I should probably combine the two data sets first before filling in the blanks
+
+```{r}
+data = bind_rows(list(training = train, testing = test %>% mutate(SalePrice = NA)), .id = 'Origin')
+
+names(data) = make.names(names(data))
+
+missing_data = data %>% is.na %>% colSums() %>% sort()
+missing_data[missing_data > 0]
+```
+
+
+```{r, fig.height=10, fig.width=10}
+visdat::vis_dat(data)
+vis_miss(data)
+data %>% select(-SalePrice) %>% as_shadow_upset() %>% upset(nsets = 21, order.by = 'freq')
+```
+
+
+These other NA's are bonafide NA's.  These will have to be imputed somehow.
+
+- LotFrontage looks like it has a strong correlation to LotArea and could be imputed from this linearly.  Otherwise, I'd have to use a model that uses NA's. Some lots must be extremely deep.  Now that I'm looking at this again, are the Lot Area's reasonable?  Could there be some typoes here?
+
+```{r}
+ggplot(data, aes(LotFrontage, LotArea)) + geom_point() + geom_smooth() + geom_smooth(method = 'lm', color = 'red')
+```
+
+QUESTION:  Why would there be so many empty LotFrontage values?  What would happen if I were to impute these?
+
+```{r}
+filter(data, LotArea == max(LotArea))
+```
+
+```{r}
+ggplot(data, aes(LotArea, SalePrice)) + geom_point() + geom_smooth() + geom_smooth(method = 'lm', color = 'red')
+```
+
+There are some HUGE LotAreas being offered at low prices.  What does this mean?
+
+So, I'm about to impute values for LotFrontage.  I don't know which learner to use, or if there will be a good learner.  Should I spend the time and do a ton of benchmark work to determine what learner would be the best learner for imputing the LotFrontage values?  Hell, why not this is practices.  
+
+I'm just going to use Random Forest, the default impute method to impute Lot Frontage.  
+
+I just learned that imputation doesn't like characters.  Therefore all characters need to be factors.
+
+```{r}
+data = mutate_if(data, is.character, as.factor)
+saveRDS(data, "data.RDS")
+```
+
+I also learned that imputation will NOT proceede if there are features that have near constant features.  Therefore I'm going to remove these before imputing.
+
+```{r}
+data2 = removeConstantFeatures(data, perc = .05)
+```
+
+```{r}
+data3 = impute(data2, target = "SalePrice", cols = list(LotFrontage = imputeLearner("regr.randomForestSRC")))
+
+```
+
+Now let's look back at the vis_miss and upsetR plots
+
+```{r}
+vis_miss(data3 %>% select(-SalePrice))
+data3 %>% select(-SalePrice) %>% as_shadow_upset() %>% upset()
+```
+
+
+
+## (all archaic below)
+
+### Exterior1st and Exterior2nd
+
+xterior1st and Exterior2nd are NA's in the test data.  This probably should be changed to "Other"
+
+```{r}
+data %>% count(Exterior1st, Exterior2nd) %>% arrange(desc(n))
+```
+
+```{r}
+data %>% filter(is.na(Exterior1st))
+```
+
+
+**revision** Whenever I try to create the regression task, mlr will not allow me to create the task with an empty level for the factor, which I think is stupid!  Therefore I'm going to impute it.
+
+```{r}
+# data$Exterior1st[is.na(data$Exterior1st)] = "Other"
+# data$Exterior2nd[is.na(data$Exterior2nd)] = "Other"
+
+missing_data = data %>% is.na %>% colSums() %>% sort()
+missing_data[missing_data > 0]
+```
+
+### BsmtFinSF1, BsmtFinSF2, BsmtUnfSF, TotalBsmtSF
+
+2) BsmtFinSF1, BsmtFinSF2, BsmtUnfSF, TotalBsmtSF should be zero if BmsmtFinType1 and BsmtFinType2 are None.
+
+```{r}
+data %>% filter(is.na(BsmtFinSF1) | is.na(BsmtFinSF2) | 
+                  is.na(BsmtFinType1) | is.na(BsmtFinType2))
+```
+
+
+```{r}
+data$BsmtFinSF1[is.na(data$BsmtFinSF1)] = 0
+data$BsmtFinSF2[is.na(data$BsmtFinSF2)] = 0
+data$BsmtUnfSF[is.na(data$BsmtUnfSF)] = 0
+data$TotalBsmtSF[is.na(data$TotalBsmtSF)] = 0
+
+missing_data = data %>% is.na %>% colSums() %>% sort()
+missing_data[missing_data > 0]
+```
+
+### Electrical
+
+3) Electrical: This entry has central air, a functional built in garage and a kitchen in good quality.  Yeah, I'm betting this house has electrical.  I'm going to give it the most common electrical thing.
+
+```{r}
+count(data, Electrical)
+```
+
+```{r}
+data$Electrical[is.na(data$Electrical)] = "SBrkr"
+
+missing_data = data %>% is.na %>% colSums() %>% sort()
+missing_data[missing_data > 0]
+```
+
+### KitchenQual
+
+4) KitchenQual: Because the overal Condition of the house gets a rating of 3 which is fair, I'm going to rate the kitchen the same.
+
+```{r}
+data %>% filter(is.na(KitchenQual)) %>% print(width = Inf)
+data$KitchenQual[is.na(data$KitchenQual)] = "Fa"
+
+missing_data = data %>% is.na %>% colSums() %>% sort()
+missing_data[missing_data > 0]
+```
+
+### GarageCars
+
+5) GarageCars: This entry the GarageArea is NA as well as GarageYrBlt.  The Garage Qual is None and the GarageCond is None and Garage Finish is None.  Why?  I'm wondering if the GarageType is incorrectly entered as Detached. I'm going to presume that there is no garage and that GarageArea should be zero, GarageCars should be zero, and GarageYrBlt should be None.
+
+```{r}
+data %>% filter(is.na(GarageCars)) %>% print(width = Inf)
+```
+
+```{r}
+summary(data$GarageYrBlt)
+```
+
+How in the hell should I treat year? These probably should be imputed in some fashion. I would loose more information changing this into factors than if I were to impute the years incorrectly.
+
+### GarageYrBlt
+
+GarageYrBlt is NA in several places.  Can this be imputed well?  If so, how can I check this?  What if I treat GarageYrBlt as a factor variable, and then simply change NA's to "Missing".  What information is lost when changing an integer variable where the difference between the values does have meaning to a factor variable?  I loose information about relative distance between observations of specific years.  For example 2015 andn 1995 are just as different as 2015 and 2014 instead of 2015 being more distant in years to 1995 as compared to 2014.
+
+```{r}
+data$GarageCars[is.na(data$GarageCars)] = 0
+data$GarageArea[is.na(data$GarageArea)] = 0
+
+missing_data = data %>% is.na %>% colSums() %>% sort()
+missing_data[missing_data > 0]
+```
+
+### SaleType
+
+6) SaleType:
+
+```{r}
+data %>% filter(is.na(SaleType)) %>% print(width = Inf)
+
+data %>% count(SaleType) %>% arrange(n)
+
+```
+
+I could change it to the most dominant SaleType or I could leave it for imputation.  I think I'll leave it for imputation.
+
+### Utilities
+
+7) Utilities
+
+```{r}
+data %>% filter(is.na(Utilities)) %>% print(width = Inf)
+
+```
+
+```{r}
+data %>% count(Utilities)
+```
+
+I'll let these be imputed as well.
+
+### BsmtFullBath, BsmtHalfBath
+
+8) BsmtFullBath, BsmtHalfBath
+
+```{r}
+data %>% filter(is.na(BsmtFullBath)) %>% print(width = Inf)
+```
+
+Both BsmtFitType1 and BsmtFinType2 are None, therefore BsmfFullBath and BsmtHalfBath should be zero as well.
+
+```{r}
+data$BsmtFullBath[is.na(data$BsmtFullBath)] = 0
+data$BsmtHalfBath[is.na(data$BsmtHalfBath)] = 0
+
+missing_data = data %>% is.na %>% colSums() %>% sort()
+missing_data[missing_data > 0]
+```
+
+### Functional
+
+9) Functional
+
+```{r}
+data %>% filter(is.na(Functional)) %>% print(width = Inf)
+```
+
+```{r}
+data %>% count(Functional)
+```
+
+I don't see anything strickingly similar with Functional.  This might be an imputation as well.
+
+### MSZoning
+
+10) MSZoning
+
+```{r}
+data %>% filter(is.na(MSZoning)) %>% print(width = Inf)
+```
+
+
+```{r}
+data %>% count(MSZoning)
+```
+
+Remove the "(all)" from the C
+
+```{r}
+data = data %>% mutate(MSZoning = str_replace(MSZoning, "C \\(all\\)", "C")) 
+data %>% count(MSZoning)
+```
+
+
+Impute this also.  It's just 4.
+
+### MasVnrArea,MasVnrType
+
+11) MasVnrArea,MasVnrType:
+
+```{r}
+data %>% filter(is.na(MasVnrType) | is.na(MasVnrArea)) %>% print(width = Inf)
+```
+
+```{r}
+data %>% count(MasVnrType)
+```
+
+MasVnrArea is related to MasVnrType. I really don't see how practical it would be to impute the area of that MasVnrArea.  
+
+```{r}
+data %>% group_by(MasVnrType) %>% summarise(mean = mean(MasVnrArea, na.rm = T),
+                                            median = median(MasVnrArea, na.rm = T),
+                                            sd = sd(MasVnrArea, na.rm =T))
+```
+
+Damnit.  So If there is No MasVnrType, the damn mean MasVnrArea should be zero!  This suggests that I need to think more about the appropriate range of values for pairs of features like these.  What other pairs of features have Area and Type in their names?
+
+```{r}
+data %>% filter(is.na(MasVnrType) & MasVnrArea > 0)
+```
+
+There are seven entries where MasVnrType == None while MasVnrArea > 0. Three of the four values equal 1 while the others are greater than 200.  I'm thinking that these values that == 1 should be zero (even though zero is not close to one on the keyboard except for the numberpad).  The values greter than 200 should NOT be None, but I don't know how easy it would be to impute these other values.  Finally there's a MasVnrTyp == NA and MasVrArea == 198.  I'm thinking this there is a missing MasVnrType
+
+Assumptions:  
+
+1) If MasVnrType & MasVnrArea are NA, then I'm setting them to None and 0 respectively.  
+2) If MasVnrType == None while MasVnrArea > 1, I'm setting MasVnrType to NA
+3) If MasVnrType == None while MasVnrArea == 1, I'm setting MasVnrArea to zero,
+
+```{r}
+boolean1 = is.na(data$MasVnrArea) & is.na(data$MasVnrType)
+boolean2 = data$MasVnrType == 'None' & data$MasVnrArea > 1
+boolean3 = data$MasVnrType == 'None' & data$MasVnrArea == 1
+
+data$MasVnrArea[boolean1] = 0
+data$MasVnrType[boolean1] = 'None'
+
+data$MasVnrType[boolean2] = NA
+
+data$MasVnrArea[boolean3] = 0
+
+
+missing_data = data %>% is.na %>% colSums() %>% sort()
+missing_data[missing_data > 0]
+```
+
+
+So apparently, in order to be extra thorough, I need to make sure that the range of all the predictors are correct.  This is going to suck!!!
+
+
+
+# Imputation
+
+## Problems with levels
+
+I've been struggling with imputing these variables and I think I've identified the culprit.  There are several factor variables that have little to no variable information.  Those factor variables that have levels with 1 member present cause all sorts of problems for imputing with a learner.  
+
+```{r}
+library(mlr)
+
+# Error in impute(data, classes = list(integer = imputeLearner("regr.gbm"), : Assertion on 'data' failed: Columns must be named according to R's variable naming conventions and may not contain special characters.
+
+# Because of the above error, I have to use this funky make.names utility that I've never seen in my life.
+
+SalePrice = data$SalePrice
+cols = list(SaleType = imputeLearner('classif.rpart'),
+            Utilities = imputeLearner('classif.rpart'),
+            Functional = imputeLearner('classif.rpart'),
+            MSZoning = imputeLearner('classif.rpart'),
+            MasVnrType = imputeLearner('classif.rpart'),
+            Exterior1st = imputeLearner('classif.rpart'),
+            Exterior2nd = imputeLearner('classif.rpart'),
+            GarageYrBlt = imputeLearner('regr.gbm'),
+            LotFrontage = imputeLearner('regr.gbm')) 
+
+
+### mlr will not impute variables if the feature type is character!!!
+d = data %>% mutate_if(is.character, as.factor)
+imp = impute(d %>% select(-SalePrice, -Origin), cols = cols)
+impdata = imp$data %>% mutate(SalePrice = SalePrice)
+
+# data %>% is.na() %>% colSums() %>% sort()
+# d %>% is.na() %>% colSums() %>% sort()
+impdata %>% is.na() %>% colSums() %>% sort()
+
+saveRDS(impdata, "cleaned_house_prices.RDS")
+
+```
+
+# Univariate EDA
+
+I looked at this a little earlier.  I need to look at the relationships between the target variable and the feature variables. 
+
+Just remember that Data Science is cyclical.  Yes, you should have performed more EDA, but would you have really known how much EDA to do had you not tried to jump into making a model?
+
+## Distribution of Target
+
+```{r}
+library(gridExtra)
+
+g_density = ggplot(impdata, aes(x = SalePrice)) + 
+  geom_histogram(aes(y = ..density..), color = 'black') + 
+  geom_density(color = 'blue')
+
+g_qqplot = ggplot(impdata, aes(sample = SalePrice)) + geom_qq() + geom_qq_line(color = 'blue')
+
+g_boxplot = ggplot(impdata, aes(x = "", y = SalePrice)) + 
+  geom_boxplot() + coord_flip()
+
+grid.arrange(g_density, g_qqplot, g_boxplot, nrow = 2)
+
+
+```
+
+This is definitely skewed.  Does APM transform the target variable?  If so, how do I do this with mlr?
+
+## Explore the Factor variables
+
+```{r}
+library(forcats)
+char_cols = map_lgl(impdata, is.factor) %>% which %>% names
+num_cols = map_lgl(impdata, is.integer) %>% which %>% names
+
+# These map_x goes through ALL the columns and only transforms those designated columns
+names(char_cols) = char_cols
+names(num_cols) = num_cols
+
+impdata %>% mutate_if(is.factor, fct_infreq)
+
+gg_table = map(char_cols, function(c){
+  # dplyr::count(impdata, get(c)) %>% arrange(n) %>% tableGrob()
+  # REMEMBER THIS ASSIGNMENT SHIT!!! HERE HERE HERE HERE
+  count(impdata, get(c)) %>% rename(!!c := `get(c)`) %>% arrange(n) %>% tableGrob()
+})
+
+gg_bar = map(char_cols, function(c){
+  ggplot(impdata, aes(x = get(c) %>% fct_infreq %>% fct_rev)) + 
+    geom_bar() + 
+    theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+    xlab(c)
+})
+
+gg_nzv = map(char_cols, function(c){
+  caret::nearZeroVar(impdata[,c], saveMetrics = TRUE) %>% mutate_if(is.logical, as.character) %>% gather() %>% tableGrob()
+})
+
+# map(1:length(gg_table), function(i){
+#   grid.arrange(grobs = list(gg_table[[i]], gg_bar[[i]]), nrow = 1)
+# })
+
+plotFactorGrobs = function(idx=1){
+    grid.arrange(grobs = list(gg_table[[idx]], gg_bar[[idx]], gg_nzv[[idx]] ), nrow = 2)
+}
+
+nzv = caret::nearZeroVar(impdata %>% select(char_cols), saveMetrics = TRUE)
+library(DT)
+datatable(nzv)
+```
+
+There are 43 of these damn things so buckle in! If caret::nearZeroVariance says a factor doesn't have enough variance, I'm going to attempt to save it by combining the smaller factors together with either fct_lump, fct_collapse. 
+
+What factor variables are in danger of being eliminated?
+
+```{r}
+(nzv_char_cols = char_cols[nzv$nzv])
+```
+
+Now lets go through these and determine if they should be removed.
+
+### Street
+
+```{r}
+plotFactorGrobs(nzv_char_cols[1])
+
+```
+
+Welp Street is definitely gone.
+
+```{r}
+impdata2 = impdata
+
+dplyr::rename(impdata2, Street_zero = Street)
+
+```
+
+### Alley
+```{r}
+plotFactorGrobs(nzv_char_cols[2])
+```
+
+```{r}
+map_dfr(3:1, function(n){
+  fct_lump(impdata2$Alley, n = n) %>% caret::nearZeroVar(saveMetrics = TRUE) %>% mutate(n = n)
+})
+```
+
+This suggests that if there are only two levels, that there is barely enough information to NOT be invariable.  So I'm going to combine Grvl and Pave into one level
+
+```{r}
+impdata2$Alley = fct_lump(impdata$Alley, n = 1) %>% fct_recode("Grvl_Pave" = "Other")
+```
+
+### LandContour
+```{r}
+plotFactorGrobs(nzv_char_cols[3])
+```
+
+I think we can save this
+
+```{r}
+map_dfr(4:1, function(n){
+  impdata2$LandContour %>% fct_lump(n = n) %>% caret::nearZeroVar(saveMetrics = T) %>% mutate(n = n)
+})
+```
+
+n =2 is a winner!!!
+
+```{r}
+impdata2$LandContour = impdata$LandContour %>% fct_lump(n=2) %>% fct_recode("Bnk_Low" = "Other")
+
+```
+
+### Utilities
+```{r}
+plotFactorGrobs(nzv_char_cols[4])
+```
+
+```{r}
+impdata2 = rename(impdata2, Utilities_zero = Utilities)
+```
+
+### LandSlope
+```{r} 
+plotFactorGrobs(nzv_char_cols[5])
+```
+
+```{r}
+map_dfr(3:1, function(n){
+  fct_lump(impdata2$LandSlope, n = n) %>% 
+    caret::nearZeroVar(saveMetrics = TRUE) %>% 
+    mutate(n = n)
+})
+```
+
+Can't save LandSlope
+
+```{r}
+impdata2 = rename(impdata2, LandSlope_zero = LandSlope)
+```
+
+### Condition2
+```{r}
+plotFactorGrobs(nzv_char_cols[6])
+```
+
+```{r}
+map_dfr(8:1, function(n){
+  fct_lump(impdata2$Condition2, n = 2) %>% 
+    caret::nearZeroVar(saveMetrics = TRUE) %>%
+    mutate(n=n)
+})
+```
+
+Remove/Merge Condition2
+
+```{r}
+impdata2 = rename(impdata2, Condition2_zeroo = Condition2)
+```
+
+### RoofMatl
+```{r}
+plotFactorGrobs(nzv_char_cols[7])
+```
+
+```{r}
+map_dfr(8:1, function(n){
+  fct_lump(impdata2$RoofMatl, n = n) %>% 
+    caret::nearZeroVar(saveMetrics = TRUE) %>% 
+    mutate(n = n)
+})
+```
+
+Damn, this is gone also.
+
+```{r}
+impdata2 = rename(impdata2, RoofMatl_zero = RoofMatl)
+```
+
+### BsmtCond
+```{r}
+plotFactorGrobs(nzv_char_cols[8])
+```
+
+```{r}
+map_dfr(5:1, function(n){
+  fct_lump(impdata2$BsmtCond, n =n ) %>% caret::nearZeroVar(saveMetrics = TRUE) %>%
+    mutate(n = n)
+})
+```
+
+```{r}
+ftable(impdata2$BsmtCond)
+fct_lump(impdata2$BsmtCond, n = 3) %>% ftable
+```
+
+```{r}
+impdata2$BsmtCond = fct_lump(impdata2$BsmtCond) %>% fct_recode("TA_Po" = "Other")
+```
+
+### BsmtFinType2
+```{r}
+plotFactorGrobs(nzv_char_cols[9])
+```
+
+```{r}
+map_dfr(6:1, function(n){
+  fct_lump(impdata2$BsmtFinType2, n = n) %>% 
+    caret::nearZeroVar(saveMetrics = TRUE) %>% 
+    mutate(n = n)
+})
+```
+
+n = 4
+
+```{r}
+count(impdata2, BsmtFinType2) %>% arrange(n)
+fct_lump(impdata2$BsmtFinType2, n = 4) %>% ftable
+```
+
+```{r}
+impdata2$BsmtFinType2 = fct_lump(impdata2$BsmtFinType2, n = 4) %>% fct_recode("GLQ_ALQ_BLQ" = "Other")
+```
+
+### Heating
+```{r}
+plotFactorGrobs(nzv_char_cols[10])
+
+```
+
+```{r}
+map_dfr(5:1, function(n){
+  fct_lump(impdata2$Heating, n = n) %>% 
+    caret::nearZeroVar(saveMetrics = TRUE) %>% mutate(n = n)
+})
+```
+
+Zero Heating out
+
+```{r}
+impdata2 = rename(impdata2, Heating_zero = Heating)
+```
+
+### Functional
+```{r}
+plotFactorGrobs(nzv_char_cols[11])
+
+```
+
+```{r}
+map_dfr(6:1, function(n){
+  fct_lump(impdata2$Functional, n=n) %>%
+    caret::nearZeroVar(saveMetrics = T) %>%
+    mutate(n = n)
+})
+```
+
+Damn, all the way down to 1
+
+```{r}
+impdata2$Functional = fct_lump(impdata2$Functional, n = 1)
+```
+
+### PoolQC
+```{r}
+plotFactorGrobs(nzv_char_cols[12])
+```
+
+```{r}
+map_dfr(3:1, function(n){
+  fct_lump(impdata2$PoolQC, n = n) %>% 
+    caret::nearZeroVar(saveMetrics = T) %>%
+    mutate(n=n)
+})
+```
+
+```{r}
+impdata2 = rename(impdata2, PoolQC_zero = PoolQC)
+```
+
+### MiscFeature
+```{r}
+plotFactorGrobs(nzv_char_cols[13])
+```
+
+```{r}
+map_dfr(4:1, function(n){
+  fct_lump(impdata2$MiscFeature, n=n) %>% 
+    caret::nearZeroVar(saveMetrics = TRUE) %>%
+    mutate(n=n)
+})
+```
+
+
+### Merge zero factors
+
+
+```{r}
+ggplot(u, aes(Trashed %>% fct_infreq() %>% fct_rev)) + geom_bar() +
+  theme(axis.text.x =element_text(angle=60, hjust = 1)) + xlab("combined categories")
+```
+
+```{r}
+count(u, Trashed) %>% arrange(desc(n))
+```
+
+```{r}
+map_dfr(29:1, function(n){
+  fct_lump(u$Trashed, n = n) %>% 
+    caret::nearZeroVar(saveMetrics = TRUE) %>%
+    mutate(n=n)
+})
+```
+
+WOW!  These may not be worth it.  I'll try it anyway.
+
+```{r}
+u$Trashed = fct_lump(u$Trashed, n = 1)
+impdata2 = u
+```
+
+### Factors to dummy variables
+
+If I create dummy variables, then I have a lot more numerical variables to study!
+```{r}
+impdata2 = mutate_at(impdata2, vars(MoSold), as.factor)
+
+dumimpdata = createDummyFeatures(impdata2, cols = names(which(map_lgl(impdata2, is.factor))))
+```
+
+I really could execute near zero variance on this dummified data set again.  I wonder what columns would return as near zero
+
+```{r}
+dum_nzv = caret::nearZeroVar(dumimpdata, saveMetrics = T)
+dum_nzv[which(dum_nzv$nzv),]
+caret_nzv_feats = rownames(dum_nzv[dum_nzv$nzv,])
+
+
+```
+
+```{r}
+mlr_nzv_feats = setdiff(names(dumimpdata), removeConstantFeatures(dumimpdata, .05) %>% names)
+
+setdiff(caret_nzv_feats, mlr_nzv_feats)
+setdiff(mlr_nzv_feats, caret_nzv_feats)
+```
+
+In conclusion, mlr::removeConstantFeatures() where perc = .05 works about as well as the default settings of caret::nearZeroVariance()
+
+So, in the light of the spirit of the CRISP-DM, I'm going to cycle through and redo the analysis, but with dummy variables.  I'm going to remove all variables based on the anlaysis from removeConstantFeatures. (I need to figure out how differently decision trees perform on the data witih factors versus the data converted to dummy variables.)
+
+```{r}
+dumimpdata2 = removeConstantFeatures(dumimpdata, .05)
+dim(dumimpdata2)
+saveRDS(dumimpdata2, "dumimpdata2.RDS")
+```
+
+
+## Explore the Numerical variables (redo ALL of this!!!)
+
+Many of the numerical variables below probably ought to be factorial such as month and/or Year.  
+
+```{r}
+idx = map(dumimpdata2, range) %>% 
+  map_lgl(function(i){ i[[1]] == 0 & i[[2]] == 1 }) %>%
+  which
+
+dumimpdata3 = mutate_at(dumimpdata2, idx, as.factor)
+glimpse(dumimpdata3)
+
+```
+
+
+```{r}
+dumimpdata3 = dumimpdata3 %>% mutate(Id = 1:nrow(dumimpdata3))
+
+num_cols = map_lgl(dumimpdata3, is.numeric) %>% which %>% names
+
+gg_density = map(num_cols[-1], function(c){
+  ggplot(dumimpdata3, aes_string(x = c)) + 
+    geom_histogram(aes(y = ..density..), alpha = .5, color = 'blue') + 
+    geom_density(color = 'red') 
+})
+
+gg_boxplot = map(num_cols[-1], function(c){
+  ggplot(dumimpdata3, aes(x = "")) + geom_boxplot(aes_string(y = c)) + coord_flip()
+})
+
+gg_qqline = map(num_cols[-1], function(c){
+  ggplot(dumimpdata3, aes_string(sample = c)) + geom_qq() + geom_qq_line(color = 'blue')
+})
+
+gg_point = map(num_cols[-1], function(c){
+  ggplot(dumimpdata3, aes_string(x='Id', y = c)) + geom_point()
+})
+```
+
+
+```{r}
+map(1:length(gg_density), function(i){
+  cat(num_cols[i+1])
+  grid.arrange(grobs = list(gg_density[[i]], gg_qqline[[i]], gg_boxplot[[i]], 
+               gg_point[[i]]), ncol = 2)
+})
+
+```
+
+Several int variables appear to be more like numeric variables based on how they look in a qqplot.  My question now is how do I best identify outliers?
+
+## Save Cleaned Data So Far
+
+```{r}
+saveRDS(dumimpdata3, "cleaned_house_prices.RDS")
+
+train_data = dumimpdata3 %>% 
+  filter(!is.na(SalePrice)) %>% 
+  mutate_if(is.factor, as.factor)
+
+test_data = dumimpdata3 %>% 
+  filter(is.na(SalePrice)) %>% 
+  mutate_if(is.factor, as.factor)
+
+saveRDS(train_data, "train_data.RDS")
+saveRDS(test_data, "test_data.RDS")
+
+```
+
+
+# Supervised Feature Selection
+
+I have a numerical outcome.  
+
+1) What are the Pearson coefficients, Spearmans correlation coefficients, adjusted r-squared from mgcv::gam, and?
+2) What are the t-tests or anova tests with the factor predictors and do volcano plots?
+
+## Numerical Predictors against Numerical Targets
+
+1) correlation coefficients
+2) rank correlation coefficients
+4) can't use loess psuedo R^2, but can use adjusted R-squared from mgcv::gam
+5) MIC ??? I don't know what provides this. The minerva package can be used to calculate the MIC statistics between the predictors and outcomes. The mine function computes several quantities including the MIC value.
+
+```{r}
+library(mgcv)
+# library(minerva)
+
+correlations = map_dfr(num_cols[-1], function(c){
+  pearson = with(train_data, cor.test(SalePrice, get(c), method = 'pearson'))
+  spearman = with(train_data, cor.test(SalePrice, get(c), method = 'spearman'))
+  gam_adj_rsq = summary(with(train_data, mgcv::gam(SalePrice ~ get(c))))$r.sq
+  mic = with(train_data, minerva::mine(SalePrice, get(c)))$MIC
+  tibble(predictor = c, 
+         pearson_cor = pearson$estimate, pearson_pvalue = pearson$p.value,
+         spearman_cor = spearman$estimate, spearman_pvalue = spearman$p.value,
+         gam_adj_rsq = gam_adj_rsq, mic = mic)
+}) %>% mutate(pearson_ranked = rank(abs(pearson_cor)), 
+              spearman_ranked = rank(abs(spearman_cor)),
+              gam_adj_rsq_ranked = rank(gam_adj_rsq),
+              mic_ranked = rank(mic))
+
+correlations2 = apply(correlations, 1, function(i){
+  tibble(row_mean = mean(as.numeric(i[8:11])), row_max = max(as.numeric(i[8:11])))
+}) %>% bind_rows() %>% bind_cols(correlations)
+
+correlations2 %>% arrange(desc(row_mean))
+
+```
+
+The question with the correlation coefficients is not whether they are significant, but whether it is neglegible.  Negligible may be a arbitrary call.  
+
+Which method should I use to determine the more relevant predictors?  If I wanted to use an ensemble of them, how would I go about doing this?  
+
+For lack of experience, I'm going to use the mean rank of these evaluations to act as relevance scores for the numeric predictors.  This is awesome!!! I love how quasi-rigorous this is.  Now if I had more understanding of the data, I may make some other assumptions, but I think this will work out fine for now.
+
+## Categorical predictors and Numeric Target
+
+- Anova
+- AUC ROC, for binary factors.
+- The Relief statistics can be calculated using the CORElearn package.
+- can use MIC for binary (0,1) data.
+
+```{r}
+fct_cols = map_lgl(train_data, is.factor) %>% which %>% names
+
+class_correlations = map_dfr(fct_cols, function(f){
+  a = anova(with(train_data, aov(SalePrice ~ get(f))))
+  auc = ROCR::performance(with(train_data, ROCR::prediction(SalePrice, get(f))), "auc")@y.values[[1]]
+  tibble(predictor = f, anova_fvalue = a$`F value`[1], anova_pvalue = a$`Pr(>F)`[1],
+  auc = ifelse(auc < .5, 1 - auc, auc))
+}) %>% arrange(desc(auc))
+
+ggplot(class_correlations, aes(auc, anova_fvalue, color = anova_pvalue < .001)) + geom_point(size =3, alpha = .4)
+```
+
+Pretty much any variable with an effective auc greater than .7 (or less than .3) is significant.
+
+# Bivariate EDA ???
+
+Numerical vs Numerical
+- scatter plots matrices 
+- correlation matrices  
+- multivariate/bivariate normality between features, 
+- heatmap with numerical plots, 
+
+Numerical vs Categorical
+- box plots 
+- anova or parametric anova for non normal values, 
+
+Categorical vs Categorical
+- Chi-squared test for independence between features 
+- Cramers V. matrix or corr plot, or clustering
+
+Other Stuff
+- filtering methods from mlr (generateFilterValuesData), 
+
+
+
+## Target versus Numerical values
+
+```{r}
+# dumimpdata2 = dumimpdata2 %>% select(-Id)
+```
+
+### Correlation Matrix
+```{r, fig.height = 7, fig.width = 7}
+# library(ggcorrplot)
+# 
+# num_cols = map_lgl(dumimpdata2, is.numeric) %>% which %>% names
+# 
+# p.mat = cor_pmat(dumimpdata2[,num_cols[-36]])
+# corr = cor(dumimpdata2[,num_cols[-36]])
+# 
+# ggcorrplot(cor(dumimpdata2[,num_cols]), p.mat = p.mat, type = 'lower')
+
+```
+
+
+### Scatter plot matrix
+```{r, fig.height = 15}
+# ggs = map(num_cols[-36], function(column){
+#   ggplot(dumimpdata2 %>% filter(!is.na(SalePrice)), aes_string("SalePrice", column)) +
+#     geom_point() + 
+#     geom_smooth() + 
+#     geom_smooth(method = 'lm', color = 'red')
+# })
+# 
+# grid.arrange(grobs = ggs[1:9], ncol = 3)
+# grid.arrange(grobs = ggs[10:18], ncol = 3)
+# grid.arrange(grobs = ggs[19:27], ncol = 3)
+# grid.arrange(grobs = ggs[28:35], ncol = 3)
+
+```
+
+
+### Multivariate Normality
+
+### Heatmaps
+
+- heatmap based on distance
+- heatmap based on correlation
+
+```{r}
+# mat = as.matrix(dumimpdata2[,num_cols[-36]])
+# 
+# heatmap.2(mat, trace = 'none', scale = 'column')
+# heatmap.2(mat, trace = 'none')
+```
+
+
+```{r, fig.height = 7, fig.width = 12}
+# I do not understand why I have to transpose this matrix! 
+# https://stackoverflow.com/questions/6714009/heatmap-function-in-r-dendrogram-failure
+
+# correlation_distance = function(x, scale = FALSE){
+#   if(scale) x = scale(x)
+#   (1 - (cor(t(x)) %>% as.dist %>% abs))/2
+# }
+# 
+# heatmap.2(mat, distfun = correlation_distance, trace = 'none', scale = 'column')
+```
+
+This doesn't tell me anything
+
+### What about Principle Component Analysis stuff??
+
+So I'm confused now.  If I'm going to represent the factor variables as dummy variables, shouldn't I have done this before exploring all these numerical values like I have?
+
+Another thought.  If I'm going to have dummy variables, should I have converted the factor variables to dummy variables before analyzing all the near zero varainces of these variables?
+
+
+## Target verus Factor Variables
+```{r}
+gg_factors = map(char_cols, function(column){
+  ggplot(dumimpdata2 %>% filter(!is.na(SalePrice)), aes_string(column, 'SalePrice')) +
+    geom_boxplot(aes_string(color = column)) + 
+    coord_flip() + theme(legend.position = 'none')
+})
+
+map(1:11, function(m){
+  grid.arrange(grobs = gg_factors[m:(m+3)], ncol = 2)
+})
+```
+
+
+## Numeric Features versus Numeric Features
+
+## Factor Features versus Factor Features
+
+## Numeric Features versus Factor Features
+
+# Feature Engineering/Selection
+
+Consider these pre-processing mlr commands
+
+1) createDummyFeatures
+2) normalizeFeatures
+3) summarizeLevels and mergeSmallFactorLevels
+4) removeConstantFeatures
+
+
+
+## Removing low informative features
+
+If there are any features with little to no variability, they ought to be removed.
+
+
+
+## Re-leveling Factors
+
+There are lots of factors that have multiple levels, but only a few members.  What is the best way to combine these factors in to levels with multiple entries???
+
+
+## Empty Levels
+
+So I've learned:
+
+1) The target of the task cannot contain NA's!  I need to separate the dumimpdata2 into the training and the testing data.
+2) feature variables that are factors cannot have empty levels.  I need to search for these.
+
+```{r}
+saveRDS(dumimpdata2, "cleaned_house_prices.RDS")
+
+train_data = dumimpdata2 %>% 
+  filter(!is.na(SalePrice)) %>% 
+  mutate_if(is.factor, as.factor)
+
+test_data = dumimpdata2 %>% 
+  filter(is.na(SalePrice)) %>% 
+  mutate_if(is.factor, as.factor)
+
+saveRDS(train_data, "train_data.RDS")
+saveRDS(test_data, "test_data.RDS")
+
+
+```
+
+
+
+
+
+

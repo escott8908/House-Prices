@@ -1,0 +1,29 @@
+---
+title: "House Prices Predictions: September 7, 2018"
+output: 
+  html_notebook:
+    toc: yes
+    toc_float: yes
+    theme: paper
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+# Imputation and Dummy Variables 
+
+```{r}
+library(mlr)
+library(tidyverse)
+#library(naniar)
+
+input = readRDS("data3.RDS")
+
+visdat::vis_dat(input)
+
+```
+
+```{r}
+is.na(input %>% select(-SalePrice)) %>% colSums() %>% sort
+```
+

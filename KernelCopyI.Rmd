@@ -1,0 +1,15 @@
+---
+title: "House prices: Lasso, XGBoost, and a detailed EDA"
+output: 
+  html_notebook:
+    toc: yes
+    toc_float: yes
+    theme: paper
+editor_options: 
+  chunk_output_type: inline
+---
+
+I'm mimicking [this](https://www.kaggle.com/erikbruin/house-prices-lasso-xgboost-and-a-detailed-eda) guys kernel somewhat, but with my data???
+
+So, I was thinking this was going to be a great reference for predictive analytics, but it is actually a great tutorial on how to explore the data.  These are VERY important.
+

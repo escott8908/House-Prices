@@ -1,0 +1,223 @@
+---
+title: "House Prices, EDA Take 3"
+output:
+  html_document:
+    df_print: paged
+    toc: yes
+  html_notebook:
+    theme: paper
+    toc: yes
+    toc_float: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+# Intro
+
+Just need to practice some EDA and MVA.  This is not to be confused with Data Mining.  
+
+References:  
+1) Intro to MVA using R
+2) exdata.pdf
+3) R for data Science
+4) (Need to get) Multivariate Data Analysis, Joseph Hair
+
+What approach do I have so far?
+1) What is the size of the data set (N vs P)?
+2) What area the types of features?
+3) How many features contain missing?
+4) What variables should be factors?
+5) What variables are normally distributed?
+6) Can these variables be normalized?
+7) What are the outliers?
+8) What are variables are significantly correlated with the target variable?
+9) What variables are significantly correlated with each other?
+
+# What is the size of the data?
+
+```{r}
+library(tidyverse)
+
+train = read_csv("train.csv")
+test = read_csv("test.csv")
+
+dim(train)
+dim(test)
+```
+
+```{r}
+names(train)
+names(test)
+```
+
+```{r}
+test = test %>% mutate(SalePrice = NA, origin = "test")
+train = train %>% mutate(origin = "train")
+
+data0 = bind_rows(test, train)
+
+dim(data)
+```
+
+# What are the data types of the features?
+
+```{r}
+data0 %>% map_chr(class) %>% ftable
+```
+
+# Explore missing data
+
+```{r, fig.height = 6}
+is.na(data0) %>% 
+  colSums %>% 
+  data.frame %>% 
+  rownames_to_column("feature") %>%
+  rename(`NA_count` = ".") %>% 
+  ggplot(aes(reorder(feature, NA_count), NA_count)) + 
+  geom_point() + 
+  coord_flip() + geom_linerange(aes(ymin = 0, ymax = NA_count))
+```
+
+There are lots of variables with zero NA's. Let's eliminate these from the figure and replot.
+
+```{r}
+is.na(data0) %>% 
+  colSums() %>%
+  as.data.frame() %>%
+  rownames_to_column("features") %>%
+  rename(NA_counts = ".") %>%
+  filter(NA_counts > 0) %>%
+  ggplot(aes(reorder(features, NA_counts), NA_counts)) + 
+  geom_point() + 
+  geom_linerange(aes(ymin = 0, ymax = NA_counts)) + 
+  coord_flip()
+```
+
+
+Many of these NA's should be renamed "None". I'll redo this reall quick before getting into imputation and proceedinig with more EDA because this is a simple fix. I'll replots these but with only those features with at least 1 NA.
+
+```{r}
+library(stringr)
+
+feats = c("Alley", "BsmtQual", "BsmtCond", "BsmtExposure", "BsmtFinType1", "BsmtFinType2", "FireplaceQu", "GarageType", "GarageFinish", "GarageQual", "GarageCond", "PoolQC", "Fence", "MiscFeature")
+
+data1 = data0 %>% 
+  mutate_at(feats, funs(replace_na(., "None")))
+
+is.na(data1) %>% colSums() %>% as.data.frame() %>% 
+  rownames_to_column("features") %>%
+  rename("NA_counts" = ".") %>% filter(NA_counts > 0) %>%
+  ggplot(aes(reorder(features, NA_counts), NA_counts)) + geom_point() + 
+  geom_linerange(aes(ymin = 0, ymax = NA_counts)) + 
+  coord_flip()
+  
+
+```
+
+This helped out alot.  The SalePrice is a red herring because this is from the testing data set.  Let's replot with this variable removed.
+
+```{r}
+is.na(data1) %>% colSums() %>% as.data.frame() %>% 
+  rownames_to_column("features") %>%
+  rename("NA_counts" = ".") %>% filter(NA_counts > 0) %>%
+  filter(features != "SalePrice") %>%
+  ggplot(aes(reorder(features, NA_counts), NA_counts)) + geom_point() + 
+  geom_linerange(aes(ymin = 0, ymax = NA_counts)) + 
+  coord_flip()
+```
+
+Let's see what this data looks like with the upsetr and visdat packages. Here's the original data set
+
+```{r}
+library(visdat)
+library(UpSetR)
+
+vis_dat(data0)
+```
+
+How georgeous is this???  Here is the updated data set
+
+```{r}
+vis_dat(data1)
+```
+
+This cleaned up alot. There area lots of missing data points in the integer data types.
+
+What does the upseter package produce.  Let's remove the SalePrice variable because this will skew the data.
+
+```{r}
+as_shadow_upset(data0 %>% select(-SalePrice)) %>% upset(nsets = 10, order.by = "freq")
+```
+
+
+Now with the added data
+
+```{r}
+as_shadow_upset(data1 %>% select(-SalePrice)) %>% upset(nsets = 10, order.by = "freq")
+```
+
+It looks like when imputing, I'm going to have to figure out a way to deal with LotFrontage and GarageYear Built last.
+
+What percentage of observations are completed?
+
+```{r}
+sum(complete.cases(select(data0, -SalePrice)))/nrow(select(data0, -SalePrice))
+sum(complete.cases(select(data1, -SalePrice)))/nrow(select(data1, -SalePrice))
+```
+
+WOW!!! What in the hell was I looking at earlier?  With over 70% of the data complete, I could perform a preliminary benchmark analysis to identify the best learner (that can accept NA's) to use for imputing the data!!!
+
+For all the entries that have a missing data point of a few, I should manually impute these data points.  I'll do something fancy for LotFrontage and GarageYrBlt.  However, GarageYrBlt should probably be a factor variable.  How many of the other integer variables should be factor variables.  Should I go ahead and change them now?  
+
+# Change Features into Factors
+
+If it is a character variable, it is safe to say that it should be a factor variable.
+
+```{r}
+data2 = data1 %>% mutate_if(is.character, as.factor)
+```
+
+What integer data types should be factors?
+```{r}
+data2 %>% select_if(is.integer) %>% glimpse
+```
+
+Oh hell! Id needs to be removed!
+
+Anything labeled Qual or Cond should be an ordered factor.
+
+MoSold should be recoded to Jan, Feb, etc. and then made into a factor variable.
+
+```{r}
+to_factor = c("MSSubClass", "MoSold")
+to_ordered_factor = c("OverallQual", "OverallCond")
+
+data3 = data2 %>% 
+  mutate_at(to_factor, as.factor) %>%
+  mutate_at(to_ordered_factor, as.factor) %>%
+  mutate_at(to_ordered_factor, as.ordered) %>%
+  mutate(MoSold = fct_recode(MoSold, 
+                              "jan"="1", "feb"="2", "mar"="3",
+                             "apr"="4",  "may"="5",  "jun"="6",
+                             "jul"="7",  "aug"="8",  "sep"="9", 
+                             "oct"="10",  "nov"="11",  "dec"="12"))
+
+glimpse(data3)
+```
+
+# What are the frequencies of the factor variables? {.tabset}
+
+```{r results='asis'}
+cat = map_lgl(data3, is.factor) %>% which %>% names
+
+for(c in cat){
+  cat("##", c, "\n")
+  g = ggplot(data3, aes_string(c)) + geom_bar()
+  print(g)
+  cat(" \n\n")
+}
+```
+
+
+# What values appear to be normal
+
